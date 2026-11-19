@@ -20,7 +20,7 @@ The frontend is plain JavaScript and talks to Supabase through the `supabase-js`
   500,000 Edge Function calls a month, 2 active projects.
 - Edge Functions (needed for invites, see decision 2) are part of the free plan.
 - It uses Postgres, a SQL database. Our data has many links (a coach has clients, a
-  client has weeks, a week's workouts point to exercises in the library), and a SQL
+  client has plans, a plan's workouts point to exercises in the library), and a SQL
   database is built for that.
 
 **Not chosen:**
@@ -140,7 +140,7 @@ Sources: [generateLink](https://supabase.com/docs/reference/javascript/auth-admi
 
 Date: 2026-11-11
 
-**Decision:** clients, exercises and weekly plans each store the coach they belong to,
+**Decision:** clients, exercises and plans each store the coach they belong to,
 even though V1 has only one coach. Who can read and change which rows is enforced by
 Row Level Security, see decision 6.
 
@@ -149,59 +149,90 @@ Row Level Security, see decision 6.
 **Not chosen:** leaving the coach out until there's a second coach. Less to write now,
 but adding it later means changing every table and the data already in them.
 
-## 4. Plans are built for each client, week by week
+## 4. Each client has one workout plan and one meal plan, with no dates
 
-Date: 2026-11-11
+Date: 2026-11-19. Replaces the decision of 2026-11-11 to build plans week by week.
 
-**Decision:** in V1 there are no saved workout or meal plans. The coach builds each
-client's week directly: for each day, a workout made of exercises from the library (or
-a rest day), and that day's meal entries. Each week belongs to one client. Carry-over is
-a button that copies the client's previous week into the next one, and the coach then
-changes the copy. Workouts and meals work the same way. Each day is stored as a date
-only (for example 2027-03-16), with no time of day, so it shows on the same date in
-every time zone.
+**Decision:** in V1 there are no saved workout or meal plans, and plans have no dates.
+Each client has:
+
+- **A workout plan:** an ordered list of workouts. Each workout has a name ("Day 1",
+  "Day 2" by default, which the coach can change to "Push" for example) and a list of
+  exercises from the library with sets, reps or time, rest and a note.
+- **A meal plan:** a list of day types ("Every day" by default, or for example
+  "Training day" and "Rest day"). Each day type has its meal entries.
+- **Last completed:** one row per client with the workout they last marked as done and
+  the time. Marking another workout replaces the row. It points at the workout's id, so
+  renaming or reordering workouts keeps the tick on the right one.
+
+The coach edits the plans in place. Old versions of a plan aren't kept.
 
 **Why:**
 
-- It's the simplest to build: a client's week just holds its days, exercises and meals,
-  and one week editor and one carry-over serve both workouts and meals.
-- It fits tailored plans, where each client gets something different.
-- It doesn't block saved plans later. They can be added as "start this week from a
-  saved plan", which copies the saved plan into the client's week, so the weeks stay
-  the same shape.
+- Coaches give splits (a 4-day plan, push-pull, push-pull-legs), not calendars. A
+  client trains when they can, so a plan tied to dates goes wrong as soon as they skip
+  a day. A list of workouts with a tick on the last completed one fits that.
+- The same shape serves both: a list of named items, each with its entries. One editor
+  pattern for the coach and one tab pattern for the client.
+- It's simpler than weeks: no carry-over, no "next week is empty" warning, no date bar
+  or month view, and no time zone rules.
+- It doesn't block saved plans later. They can be added as "start from a saved plan",
+  which copies the saved plan into the client's plan, so the plans stay the same shape.
 
 **Not chosen:**
 
+- **Plans built week by week, with dates** (the decision of 2026-11-11): the coach had
+  to build or carry over every client's week, every week, and the client only needed
+  the calendar to find today's workout.
+- **The app working out today's workout from the date** (for example "every Monday is
+  Day 1"): breaks when a client skips or moves a day. The tick on the last completed
+  workout lets the client decide.
+- **Keeping old plans as history:** nobody needs it in V1. Saved plans in a later
+  version would cover it.
 - **Saved plans linked to each client, with changes per client** (like components in
-  Penpot or Figma): one edit to a saved plan reaches every client who follows it, which
-  saves the coach time when many clients share a plan. But it needs links, changes per
-  client, and rules for what an edit does to past days and changed days. Moving from
-  this model back to plans per client would mean undoing the links.
-- **Saved plans copied into each client's week:** a library editor on top of plans per
-  client. Left for a later version, since it can be added without changing how weeks
+  Penpot or Figma): one edit to a saved plan reaches every client who follows it, but it
+  needs links, changes per client, and rules for what an edit does to each client.
+  Moving from this model back to plans per client would mean undoing the links.
+- **Saved plans copied into each client's plan:** a library editor on top of plans per
+  client. Left for a later version, since it can be added without changing how plans
   are stored.
-- **Carry-over repeating the last week on its own:** a week would never be empty, but a
-  client could follow a plan the coach never meant to continue.
 
-**Watch for:** the coach types every client's plans by hand. If coaches end up building
-the same plans for many clients, that's the sign to add saved plans.
+**Watch for:**
+
+- The coach types every client's plans by hand. If coaches end up building the same
+  plans for many clients, that's the sign to add saved plans.
+- If the coach removes the workout that's marked "Last completed", the row goes with
+  it and the client sees no tick until they mark another workout.
 
 ## 5. Offline with a service worker and a saved copy
 
-Date: 2026-11-11
+Date: 2026-11-11. Moved to a later version on 2026-11-19.
+
+**V1:** the app needs a connection, and there is no service worker. It can still be
+installed: Chrome's install criteria are HTTPS and a web app manifest (a name, icons at
+192 and 512 px, a `start_url` and a `display` value), and they don't list a service
+worker. Moved because "Mark as done" (decision 4) is the first thing a client sends to
+the database, and sending it later from offline needs its own logic: a retry when
+sending fails (the browser's "online" signal isn't reliable on weak wifi), the time of
+the tap rather than of the send, dropping a tap whose workout the coach removed, and
+dropping waiting taps on sign out.
+
+Source: [install criteria](https://web.dev/articles/install-criteria).
+
+The rest of this decision is the plan for that later version.
 
 **Decision:**
 
 - A service worker (a script the browser runs in the background for the site) saves the
   app's own files (HTML, CSS, JS), so the app opens without a connection.
-- Each time the client loads their plans, the app saves a copy on the phone (at least
-  the current and next week). When offline, it shows that copy, read only, with the
-  time it was last updated.
+- Each time the client loads their plans, the app saves a copy on the phone. When
+  offline, it shows that copy, read only, with the time it was last updated.
+- A "Mark as done" made offline is saved on the phone and sent when the connection
+  comes back.
 - Sign-in stays saved through `auth.persistSession`, which "automatically save[s] the
   user session into local storage".
 
-**Why:** clients often open the app in gyms with bad signal. V1 is view only, so the
-app only reads the saved copy, and there's nothing to send back and sync later.
+**Why:** clients often open the app in gyms with bad signal.
 
 **Not chosen:** no offline support. Less work, but the app would fail when it's most
 needed.
@@ -211,8 +242,8 @@ needed.
 - `supabase-js` doesn't seem to save data for offline use on its own. Its client options
   page lists nothing for it, so we write the saved copy ourselves.
 - Where on the phone to save the copy (localStorage or IndexedDB) is not decided yet.
-- Offline gets harder in V2, once clients record what they did and it has to be sent
-  back later.
+- Offline gets harder as clients record more (weights, records), since all of it has
+  to be sent back later.
 
 Source: [createClient options](https://supabase.com/docs/reference/javascript/initializing).
 
@@ -222,7 +253,8 @@ Date: 2026-11-11
 
 **Decision:** every table has Row Level Security turned on, with policies (rules written
 in SQL and attached to a table) for who can read and change its rows. A coach reads and
-changes only their own data. A client only reads their own plans. Supabase checks the
+changes only their own data. A client reads their own plans, and writes only their own
+"Last completed" row, which must point at a workout in their own plan. Supabase checks the
 policies on every request, whatever the frontend code does.
 
 **Why:** the frontend talks to the database directly, using a public key that anyone
@@ -247,7 +279,7 @@ Workers, on the Free plan, deployed from the GitHub repo.
 - The app is only static files. Everything dynamic runs on Supabase (decision 1), so
   static hosting is enough.
 - "Requests to static assets are free and unlimited" on Workers.
-- Every site gets an HTTPS address, which the service worker needs (decision 5).
+- Every site gets an HTTPS address, which installing the app needs (decision 5).
 - Cloudflare recommends Workers over Pages for new projects: "Workers supports most
   Pages use cases and offers a broader feature set" and "Start new projects with
   Workers."
